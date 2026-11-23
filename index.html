@@ -329,6 +329,8 @@ function segmentParts(img,threshold,minArea,passline){
   const ctx=cv.getContext('2d',{willReadFrequently:true});ctx.drawImage(img,0,0);
   const data=ctx.getImageData(0,0,W,H).data;
   const N=W*H;
+  // 最小面积按图片尺寸自适应：基准 640×640 下用户设的值，小图按比例缩小，避免小图上零件被全部过滤
+  const effMinArea=Math.max(8,Math.round(minArea*(N/(640*640))));
   const gray=new Uint8Array(N);
   for(let i=0,p=0;i<N;i++,p+=4){gray[i]=(data[p]*77+data[p+1]*150+data[p+2]*29)>>8}
   // 用图像四边像素估计背景灰度（中值）
@@ -359,7 +361,7 @@ function segmentParts(img,threshold,minArea,passline){
     }
     // 过滤：面积、紧贴画布边缘的大块（背景误判）
     const touchesEdge=minx===0||miny===0||maxx===W-1||maxy===H-1;
-    if(area>=minArea && !(touchesEdge && area>N*0.35)){
+    if(area>=effMinArea && !(touchesEdge && area>N*0.35)){
       const bw=maxx-minx+1,bh=maxy-miny+1;
       const fill=area/(bw*bh);
       // 形状质量分：填充率越高越"实心规整"，作为质检评分
@@ -373,6 +375,23 @@ function segmentParts(img,threshold,minArea,passline){
     return {id:i+1,name:'零件'+(i+1),code:'PRT-'+(i+1),score:c.score,box:c.box,
             gx,gy,grade:c.score>=passline?'pass':'warn',area:c.area};
   });
+}
+
+/* ---- 视觉分割 + 自动兜底：0 检出时逐级放宽参数重试 ---- */
+function segmentWithFallback(img,segth,minArea,passline){
+  let parts=segmentParts(img,segth,minArea,passline);
+  if(parts.length)return {parts,adjusted:false};
+  // 原图分辨率小、对比度低时，固定阈值会把零件全部滤掉；逐级放宽
+  const tries=[
+    {th:Math.max(6,segth-6),ma:Math.max(30,Math.round(minArea/2))},
+    {th:6,ma:Math.max(12,Math.round(minArea/6))},
+    {th:4,ma:8}
+  ];
+  for(const t of tries){
+    parts=segmentParts(img,t.th,t.ma,passline);
+    if(parts.length)return {parts,adjusted:true,msg:`已自动放宽分割参数 (阈值${t.th}/面积${t.ma})`};
+  }
+  return {parts:[],adjusted:false};
 }
 
 function render(parts){
@@ -459,14 +478,24 @@ async function run(){
     // ---- 自动切换：YOLO 无检出 / 检出少且低置信 → 视觉分割，取更优结果 ----
     if(mode==='seg'){
       setStatus('视觉分割引擎处理中…');
-      parts=segmentParts(currentImage,segth,minArea,passline);engine='视觉分割';
+      const r=segmentWithFallback(currentImage,segth,minArea,passline);
+      parts=r.parts;engine=parts.length?'视觉分割':'未检出';
+      if(r.adjusted)setStatus('视觉分割 · '+r.msg);
     }else if(mode==='auto'){
-      const maxConf=parts.length?Math.max(...parts.map(p=>p.score)):0;
-      const weak=parts.length===0 || (parts.length<=2 && maxConf<0.7);
-      if(weak){
-        setStatus('YOLO 结果不足，切换视觉分割引擎…');
-        const segParts=segmentParts(currentImage,segth,minArea,passline);
-        if(segParts.length>parts.length){parts=segParts;engine='视觉分割'}
+      // ---- 双引擎交叉校验：评估 YOLO 结果是否「域内可信」 ----
+      // 工业零件（螺丝/螺母/PCB/电机等）是可信类；纸箱/玻璃/亚克力等是桥接材质类，
+      // 在 3D 渲染/CAD 图上极易被误检为这些类，出现即视为域外信号。
+      const strongCls=new Set(['螺丝','螺母/螺栓','电路板','电机','电池','工具','线缆','金属型材']);
+      const strong=parts.filter(p=>strongCls.has(p.name)&&p.score>=passline).length;
+      const topStrong=parts.filter(p=>strongCls.has(p.name)&&p.score>=0.85).length;
+      // 域内可信判据：≥2 个强类目标过合格线，或 ≥1 个强类目标置信度≥0.85
+      const yoloOK=parts.length>0 && (strong>=2 || topStrong>=1);
+      const segParts=yoloOK?[]:segmentWithFallback(currentImage,segth,minArea,passline).parts;
+      if(yoloOK){
+        setStatus('YOLO 检出域内工业零件，采用模型结果');
+      }else{
+        setStatus('YOLO 结果疑似域外误检，已切换视觉分割');
+        parts=segParts;engine=segParts.length?'视觉分割':(parts.length?'YOLO11n':'未检出');
       }
     }
     const ms=performance.now()-t0;
