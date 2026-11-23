@@ -1,0 +1,531 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>工业零件视觉抓取质检系统</title>
+<style>
+:root{
+  --bg:#0b0f14;--panel:#141a22;--panel2:#1b232e;--line:#263140;
+  --txt:#e6edf3;--muted:#8b9bb0;--cyan:#00d4aa;--orange:#ff9f43;
+  --green:#00d4aa;--yellow:#ffc107;--red:#ff5c6c;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--txt);font-family:"Segoe UI","Microsoft YaHei",sans-serif;font-size:14px;line-height:1.5}
+.wrap{max-width:1500px;margin:0 auto;padding:18px 22px 60px}
+
+/* header */
+header{display:flex;align-items:center;gap:16px;padding:14px 20px;background:linear-gradient(90deg,#101820,#141f2b);border:1px solid var(--line);border-radius:12px;margin-bottom:16px}
+.logo{width:44px;height:44px;border-radius:10px;background:linear-gradient(135deg,var(--cyan),#0088aa);display:flex;align-items:center;justify-content:center;font-size:24px;flex-shrink:0}
+h1{font-size:19px;font-weight:700;letter-spacing:.5px}
+.sub{font-size:12px;color:var(--muted);margin-top:2px}
+.hspace{flex:1}
+.chip{font-size:11px;padding:5px 10px;border:1px solid var(--line);border-radius:20px;color:var(--muted);white-space:nowrap}
+.chip b{color:var(--cyan)}
+.dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--muted);margin-right:6px}
+.dot.on{background:var(--green);box-shadow:0 0 8px var(--green)}
+
+/* layout */
+.grid{display:grid;grid-template-columns:270px 1fr 330px;gap:16px;align-items:start}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px}
+.panel h2{font-size:13px;text-transform:uppercase;letter-spacing:1px;color:var(--cyan);margin-bottom:14px;display:flex;align-items:center;gap:8px}
+.panel h2 .n{background:var(--panel2);border:1px solid var(--line);border-radius:5px;padding:1px 7px;font-size:11px;color:var(--muted)}
+label{font-size:12px;color:var(--muted);display:block;margin:12px 0 5px}
+input[type=number],select{width:100%;background:var(--panel2);border:1px solid var(--line);color:var(--txt);padding:8px 10px;border-radius:7px;font-size:13px}
+input[type=range]{width:100%;accent-color:var(--cyan)}
+.hint{font-size:11px;color:var(--muted);line-height:1.6;margin-top:5px}
+
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:7px;background:var(--panel2);border:1px solid var(--line);color:var(--txt);padding:9px 12px;border-radius:8px;cursor:pointer;font-size:13px;transition:.15s;user-select:none}
+.btn:hover{border-color:var(--cyan);color:var(--cyan)}
+.btn.primary{background:linear-gradient(135deg,var(--cyan),#00a888);color:#04120f;border:none;font-weight:700}
+.btn.primary:hover{filter:brightness(1.1)}
+.btn:disabled{opacity:.4;cursor:not-allowed}
+.btn.wide{width:100%}
+
+.drop{border:2px dashed var(--line);border-radius:10px;padding:26px 14px;text-align:center;cursor:pointer;transition:.2s;background:var(--panel2)}
+.drop:hover,.drop.over{border-color:var(--cyan);background:#132a2a}
+.drop .ic{font-size:30px;margin-bottom:8px}
+.drop .t{font-size:13px;color:var(--txt)}
+.drop .s{font-size:11px;color:var(--muted);margin-top:4px}
+#file{display:none}
+
+.sep{height:1px;background:var(--line);margin:16px 0}
+
+/* stage */
+.stagewrap{position:relative;background:#0a0e13;border:1px solid var(--line);border-radius:10px;overflow:hidden;min-height:420px;display:flex;align-items:center;justify-content:center}
+#stage{max-width:100%;max-height:560px;display:none}
+.placeholder{color:var(--muted);text-align:center;padding:60px 20px}
+.placeholder .big{font-size:46px;opacity:.35;margin-bottom:12px}
+.runbar{display:flex;gap:10px;margin-top:12px;align-items:center;flex-wrap:wrap}
+.status{font-size:12px;color:var(--muted)}
+.status.ok{color:var(--green)}.status.err{color:var(--red)}
+
+/* verdict */
+.verdict{border-radius:10px;padding:14px 16px;margin-bottom:14px;border:1px solid var(--line);background:var(--panel2)}
+.verdict .top{display:flex;align-items:center;gap:12px}
+.badge{font-size:22px;font-weight:800;letter-spacing:1px}
+.verdict.pass{border-color:#0c6b56;background:#0d2b26}
+.verdict.pass .badge{color:var(--green)}
+.verdict.fail{border-color:#7a2b38;background:#2b1419}
+.verdict.fail .badge{color:var(--red)}
+.verdict.warn{border-color:#7a6420;background:#2b2510}
+.verdict.warn .badge{color:var(--yellow)}
+.verdict.idle .badge{color:var(--muted)}
+.verdict .desc{font-size:12px;color:var(--muted);margin-top:6px}
+
+.kpis{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-bottom:14px}
+.kpi{background:var(--panel2);border:1px solid var(--line);border-radius:9px;padding:11px}
+.kpi .v{font-size:22px;font-weight:700}
+.kpi .l{font-size:11px;color:var(--muted);margin-top:2px}
+.kpi.g .v{color:var(--green)}.kpi.y .v{color:var(--yellow)}.kpi.r .v{color:var(--red)}
+
+table{width:100%;border-collapse:collapse;font-size:12px}
+th{text-align:left;color:var(--muted);font-weight:600;padding:7px 6px;border-bottom:1px solid var(--line);font-size:11px}
+td{padding:7px 6px;border-bottom:1px solid #1e2733}
+tr:last-child td{border-bottom:none}
+.tag{font-size:10px;padding:2px 7px;border-radius:10px;font-weight:600;white-space:nowrap}
+.tag.pass{background:#0d2b26;color:var(--green)}
+.tag.warn{background:#2b2510;color:var(--yellow)}
+.tag.reject{background:#2b1419;color:var(--red)}
+.scroll{max-height:300px;overflow:auto}
+.scroll::-webkit-scrollbar{width:6px}
+.scroll::-webkit-scrollbar-thumb{background:var(--line);border-radius:3px}
+
+.legend{display:flex;gap:14px;font-size:11px;color:var(--muted);margin-top:10px;flex-wrap:wrap}
+.legend span{display:flex;align-items:center;gap:5px}
+.legend i{width:9px;height:9px;border-radius:2px;display:inline-block}
+
+.note{font-size:11px;color:var(--muted);background:var(--panel2);border-left:2px solid var(--orange);padding:9px 11px;border-radius:4px;line-height:1.6;margin-top:12px}
+footer{margin-top:18px;text-align:center;color:#5a6a7d;font-size:11px}
+.toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:var(--panel2);border:1px solid var(--cyan);color:var(--txt);padding:10px 18px;border-radius:8px;font-size:13px;opacity:0;pointer-events:none;transition:.3s;z-index:99}
+.toast.show{opacity:1}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <div class="logo">⚙</div>
+  <div>
+    <h1>工业零件视觉抓取质检系统</h1>
+    <div class="sub">Industrial Part Grasping &amp; Quality Inspection · YOLO11n 工业零件检测</div>
+  </div>
+  <div class="hspace"></div>
+  <div class="chip" id="engine"><span class="dot"></span>引擎加载中…</div>
+  <div class="chip">双引擎 <b>YOLO11n + 视觉分割</b></div>
+</header>
+
+<div class="grid">
+
+  <!-- LEFT -->
+  <div class="panel">
+    <h2>① 输入与参数 <span class="n">INPUT</span></h2>
+
+    <div class="drop" id="drop">
+      <div class="ic">📷</div>
+      <div class="t">点击或拖拽上传工业零件图片</div>
+      <div class="s">支持 JPG / PNG / WEBP · 本地处理不上传</div>
+    </div>
+    <input type="file" id="file" accept="image/*">
+
+    <div class="sep"></div>
+
+    <label>检测引擎</label>
+    <select id="engine-mode">
+      <option value="auto">自动（YOLO 优先，检不出切视觉分割）</option>
+      <option value="yolo">仅 YOLO 模型识别</option>
+      <option value="seg">仅视觉分割定位</option>
+    </select>
+    <div class="hint" id="engine-hint">YOLO 认螺丝/螺母/PCB 等 15 类；3D 渲染图、密集零件合集用视觉分割。</div>
+
+    <label>置信度阈值（YOLO 用）</label>
+    <input type="range" id="conf" min="0.05" max="0.90" step="0.05" value="0.25">
+    <div class="hint" id="confv">0.25 — 低于此值的目标不纳入统计</div>
+
+    <label>合格判定线</label>
+    <input type="range" id="passline" min="0.30" max="0.95" step="0.05" value="0.55">
+    <div class="hint" id="passlinev">0.55 — 置信度≥此值判合格，之间判可疑</div>
+
+    <label>视觉分割灵敏度（分割引擎用）</label>
+    <input type="range" id="segth" min="6" max="40" step="2" value="14">
+    <div class="hint" id="segthv">14 — 值越小越敏感（保留更多细节），越大越保守</div>
+
+    <label>最小零件面积（px²，分割引擎用）</label>
+    <input type="number" id="minarea" min="20" max="50000" value="150">
+
+    <label>期望零件数量（可选，0=不检查）</label>
+    <input type="number" id="expect" min="0" max="999" value="0">
+
+    <div class="hint">
+      质检规则：置信度/质量分 ≥ 合格线 → <span style="color:var(--green)">合格</span>；
+      之间 → <span style="color:var(--yellow)">可疑</span>；设置期望数量后不符判 NG。
+    </div>
+
+    <div class="sep"></div>
+    <div class="legend">
+      <span><i style="background:var(--green)"></i>合格可抓取</span>
+      <span><i style="background:var(--yellow)"></i>疑似缺陷</span>
+    </div>
+  </div>
+
+  <!-- CENTER -->
+  <div class="panel">
+    <h2>② 抓取定位画面 <span class="n">VISION</span></h2>
+    <div class="stagewrap" id="stagewrap">
+      <div class="placeholder" id="placeholder">
+        <div class="big">⬡</div>
+        <div>上传图片后，检测结果将显示在这里</div>
+        <div style="font-size:11px;margin-top:6px">十字准星 = 机械臂抓取点 · 彩色框 = 质检等级</div>
+      </div>
+      <canvas id="stage"></canvas>
+    </div>
+    <div class="runbar">
+      <button class="btn primary" id="btn-run" disabled>▶ 开始检测与质检</button>
+      <button class="btn" id="btn-clear" disabled>清空</button>
+      <span class="status" id="status">等待上传图片</span>
+    </div>
+    <div class="note" id="note-engine">
+      <b>双引擎</b>：① YOLO11n 模型识别螺丝、螺母/螺栓、PCB、电机等 15 类并给类别与置信度；
+      ② 视觉分割引擎（背景差分 + 连通域）定位任意形状零件，适用于 3D 渲染图、密集零件合集。
+      自动模式先跑 YOLO，检不出时自动切换。输出<b>抓取点坐标</b>与<b>质检等级</b>，可导出报告。
+    </div>
+  </div>
+
+  <!-- RIGHT -->
+  <div class="panel">
+    <h2>③ 质检结果 <span class="n">RESULT</span></h2>
+
+    <div class="verdict idle" id="verdict">
+      <div class="top">
+        <div class="badge" id="v-badge">待检测</div>
+      </div>
+      <div class="desc" id="v-desc">上传图片并点击开始检测</div>
+    </div>
+
+    <div class="kpis">
+      <div class="kpi"><div class="v" id="k-total">0</div><div class="l">检出零件</div></div>
+      <div class="kpi g"><div class="v" id="k-pass">0</div><div class="l">合格</div></div>
+      <div class="kpi y"><div class="v" id="k-warn">0</div><div class="l">疑似缺陷</div></div>
+      <div class="kpi"><div class="v" id="k-conf">—</div><div class="l">平均质量分</div></div>
+    </div>
+
+    <h2 style="margin-top:6px">抓取点 / 零件明细</h2>
+    <div class="scroll">
+      <table>
+        <thead><tr><th>#</th><th>零件类别</th><th>质量分</th><th>抓取点(px)</th><th>判定</th></tr></thead>
+        <tbody id="tbody"><tr><td colspan="5" style="color:var(--muted);text-align:center;padding:18px">暂无数据</td></tr></tbody>
+      </table>
+    </div>
+
+    <div class="runbar" style="margin-top:14px">
+      <button class="btn wide" id="btn-export" disabled>⬇ 导出质检报告 (JSON)</button>
+    </div>
+  </div>
+
+</div>
+
+<footer>工业零件视觉抓取质检系统 · 本地浏览器推理 · 图片不离开设备</footer>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const $=id=>document.getElementById(id);
+const CLASSES=['screw','nut_bolt','pcb','filament_spool','wood_offcut','cable','3d_print_part','acrylic_sheet','metal_profile','motor','battery','tool','plastic_container','cardboard','glass'];
+const CN={screw:'螺丝',nut_bolt:'螺母/螺栓',pcb:'电路板',filament_spool:'线轴',wood_offcut:'木料',cable:'线缆','3d_print_part':'3D打印件',acrylic_sheet:'亚克力板',metal_profile:'金属型材',motor:'电机',battery:'电池',tool:'工具',plastic_container:'塑料容器',cardboard:'纸箱',glass:'玻璃件'};
+const CODE={screw:'SCR',nut_bolt:'NUT',pcb:'PCB',motor:'MTR',battery:'BAT',tool:'TOL',cable:'CBL',metal_profile:'MET'};
+
+let ortSession=null,currentImage=null,lastReport=null,ortLoading=false;
+
+function toast(msg){const t=$('toast');t.textContent=msg;t.classList.add('show');clearTimeout(t._t);t._t=setTimeout(()=>t.classList.remove('show'),2200)}
+function setStatus(m,c=''){const e=$('status');e.textContent=m;e.className='status '+c}
+
+function loadScript(src){return new Promise((res,rej)=>{const s=document.createElement('script');s.src=src;s.onload=res;s.onerror=()=>rej(new Error('CDN 加载失败')) ;document.head.appendChild(s)})}
+
+async function ensureSession(){
+  if(ortSession)return ortSession;
+  if(ortLoading)return null;
+  ortLoading=true;
+  try{
+    setStatus('正在加载推理引擎…');
+    if(!window.ort) await loadScript('https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/ort.min.js');
+    ort.env.wasm.numThreads=1; ort.env.wasm.simd=true;
+    setStatus('正在加载工业零件模型 (10 MB)…');
+    ortSession=await ort.InferenceSession.create('models/yolo11n_makerspace.onnx',{executionProviders:['wasm'],graphOptimizationLevel:'all'});
+    window._in=ortSession.inputNames[0]||'images';
+    $('engine').innerHTML='<span class="dot on"></span>引擎就绪';
+    setStatus('引擎就绪 ✓');
+    return ortSession;
+  }catch(e){setStatus('模型加载失败：'+e.message,'err');$('engine').innerHTML='<span class="dot" style="background:var(--red)"></span>引擎异常';console.error(e);return null}
+  finally{ortLoading=false}
+}
+
+/* ---- preprocessing: RGBA safe ---- */
+function letterbox(img){
+  const IW=640,IH=640;
+  const cv=document.createElement('canvas');cv.width=IW;cv.height=IH;
+  const ctx=cv.getContext('2d',{willReadFrequently:true});
+  ctx.fillStyle='rgb(114,114,114)';ctx.fillRect(0,0,IW,IH);
+  const r=Math.min(IW/img.naturalWidth,IH/img.naturalHeight);
+  const nw=Math.round(img.naturalWidth*r),nh=Math.round(img.naturalHeight*r);
+  const dw=Math.floor((IW-nw)/2),dh=Math.floor((IH-nh)/2);
+  ctx.drawImage(img,dw,dh,nw,nh);
+  const d=ctx.getImageData(0,0,IW,IH).data; // RGBA: 4 bytes per pixel
+  const plane=IW*IH,chw=new Float32Array(3*plane);
+  let p=0;
+  for(let i=0;i<plane;i++){
+    chw[i]=d[p++]/255;          // R
+    chw[plane+i]=d[p++]/255;    // G
+    chw[2*plane+i]=d[p++]/255;  // B
+    p++;                        // A skipped
+  }
+  return {data:chw,r,dw,dh};
+}
+
+/* ---- decode [1,19,8400] ---- */
+function decode(raw,r,dw,dh,conf,iou){
+  const A=raw.length/19; // 8400
+  const boxes=[],scores=[],classes=[];
+  for(let i=0;i<A;i++){
+    let best=0,bi=0;
+    for(let c=0;c<15;c++){const v=raw[(4+c)*A+i];if(v>best){best=v;bi=c}}
+    if(best<conf)continue;
+    const cx=raw[i],cy=raw[A+i],bw=raw[2*A+i],bh=raw[3*A+i];
+    boxes.push([(cx-bw/2-dw)/r,(cy-bh/2-dh)/r,(cx+bw/2-dw)/r,(cy+bh/2-dh)/r]);
+    scores.push(best);classes.push(bi);
+  }
+  // per-class NMS
+  const keep=[];
+  for(let c=0;c<15;c++){
+    const idx=classes.map((cl,i)=>cl===c?i:-1).filter(i=>i>=0).sort((a,b)=>scores[b]-scores[a]);
+    while(idx.length){
+      const i=idx.shift();keep.push(i);
+      const [ax1,ay1,ax2,ay2]=boxes[i],aa=Math.max(0,ax2-ax1)*Math.max(0,ay2-ay1);
+      for(let k=idx.length-1;k>=0;k--){
+        const j=idx[k],[bx1,by1,bx2,by2]=boxes[j];
+        const it=Math.max(0,Math.min(ax2,bx2)-Math.max(ax1,bx1))*Math.max(0,Math.min(ay2,by2)-Math.max(ay1,by1));
+        if(aa>0 && it/aa>=iou) idx.splice(k,1);
+      }
+    }
+  }
+  keep.sort((a,b)=>scores[b]-scores[a]);
+  return keep.map(i=>({box:boxes[i],score:scores[i],cls:classes[i]}));
+}
+
+/* ---- quality grading ---- */
+function grade(dets,passline){
+  return dets.map((d,i)=>{
+    const g=d.score>=passline?'pass':'warn';
+    const x=(d.box[0]+d.box[2])/2,y=(d.box[1]+d.box[3])/2;
+    return {id:i+1,cls:d.cls,name:CN[CLASSES[d.cls]]||CLASSES[d.cls],code:CODE[CLASSES[d.cls]]||('C'+d.cls),
+            score:d.score,box:d.box,gx:x,gy:y,grade:g};
+  });
+}
+
+/* ---- 通用视觉分割引擎：背景差分 + 连通域，定位任意形状零件 ---- */
+function segmentParts(img,threshold,minArea,passline){
+  const W=img.naturalWidth,H=img.naturalHeight;
+  const cv=document.createElement('canvas');cv.width=W;cv.height=H;
+  const ctx=cv.getContext('2d',{willReadFrequently:true});ctx.drawImage(img,0,0);
+  const data=ctx.getImageData(0,0,W,H).data;
+  const N=W*H;
+  const gray=new Uint8Array(N);
+  for(let i=0,p=0;i<N;i++,p+=4){gray[i]=(data[p]*77+data[p+1]*150+data[p+2]*29)>>8}
+  // 用图像四边像素估计背景灰度（中值）
+  const border=[];
+  const step=Math.max(1,Math.floor(Math.min(W,H)/120));
+  for(let x=0;x<W;x+=step){border.push(gray[x],gray[(H-1)*W+x])}
+  for(let y=0;y<H;y+=step){border.push(gray[y*W],gray[y*W+W-1])}
+  border.sort((a,b)=>a-b);
+  const bg=border[border.length>>1];
+  // 前景二值化：与背景差异超过阈值
+  const bin=new Uint8Array(N);
+  for(let i=0;i<N;i++){bin[i]=Math.abs(gray[i]-bg)>threshold?1:0}
+  // 连通域标记（4邻域 BFS）
+  const seen=new Uint8Array(N),queue=new Int32Array(N);
+  const comps=[];
+  for(let s=0;s<N;s++){
+    if(!bin[s]||seen[s])continue;
+    let head=0,tail=0,area=0,minx=W,miny=H,maxx=0,maxy=0,sx=0,sy=0;
+    queue[tail++]=s;seen[s]=1;
+    while(head<tail){
+      const idx=queue[head++],x=idx%W,y=(idx/W)|0;
+      area++;sx+=x;sy+=y;
+      if(x<minx)minx=x;if(x>maxx)maxx=x;if(y<miny)miny=y;if(y>maxy)maxy=y;
+      if(x>0&&bin[idx-1]&&!seen[idx-1]){seen[idx-1]=1;queue[tail++]=idx-1}
+      if(x<W-1&&bin[idx+1]&&!seen[idx+1]){seen[idx+1]=1;queue[tail++]=idx+1}
+      if(y>0&&bin[idx-W]&&!seen[idx-W]){seen[idx-W]=1;queue[tail++]=idx-W}
+      if(y<H-1&&bin[idx+W]&&!seen[idx+W]){seen[idx+W]=1;queue[tail++]=idx+W}
+    }
+    // 过滤：面积、紧贴画布边缘的大块（背景误判）
+    const touchesEdge=minx===0||miny===0||maxx===W-1||maxy===H-1;
+    if(area>=minArea && !(touchesEdge && area>N*0.35)){
+      const bw=maxx-minx+1,bh=maxy-miny+1;
+      const fill=area/(bw*bh);
+      // 形状质量分：填充率越高越"实心规整"，作为质检评分
+      const score=Math.min(0.99,Math.max(0.35,0.45+0.55*fill));
+      comps.push({box:[minx,miny,maxx+1,maxy+1],area,score,fill});
+    }
+  }
+  comps.sort((a,b)=>(b.box[0]+b.box[2])/2-(a.box[0]+a.box[2])/2 || a.box[1]-b.box[1]);
+  return comps.map((c,i)=>{
+    const gx=(c.box[0]+c.box[2])/2,gy=(c.box[1]+c.box[3])/2;
+    return {id:i+1,name:'零件'+(i+1),code:'PRT-'+(i+1),score:c.score,box:c.box,
+            gx,gy,grade:c.score>=passline?'pass':'warn',area:c.area};
+  });
+}
+
+function render(parts){
+  const canvas=$('stage'),ctx=canvas.getContext('2d'),img=currentImage;
+  const W=img.naturalWidth,H=img.naturalHeight;
+  canvas.width=W;canvas.height=H;
+  ctx.clearRect(0,0,W,H);ctx.drawImage(img,0,0,W,H);
+  const scale=Math.max(1,W/1100);
+  parts.forEach(p=>{
+    const col=p.grade==='pass'?'#00d4aa':'#ffc107';
+    const [x1,y1,x2,y2]=p.box;
+    ctx.strokeStyle=col;ctx.lineWidth=2*scale;ctx.strokeRect(x1,y1,x2-x1,y2-y1);
+    // 半透明填充
+    ctx.fillStyle=col;
+    ctx.globalAlpha=0.08;ctx.fillRect(x1,y1,x2-x1,y2-y1);ctx.globalAlpha=1;
+    // 抓取十字
+    const gx=p.gx,gy=p.gy,s=9*scale;
+    ctx.strokeStyle=col;ctx.lineWidth=1.6*scale;
+    ctx.beginPath();ctx.moveTo(gx-s,gy);ctx.lineTo(gx+s,gy);ctx.moveTo(gx,gy-s);ctx.lineTo(gx,gy+s);ctx.stroke();
+    ctx.beginPath();ctx.arc(gx,gy,s*1.4,0,Math.PI*2);ctx.stroke();
+    // 标签
+    const label=`#${p.id} ${p.name} ${(p.score*100).toFixed(0)}%`;
+    ctx.font=`600 ${13*scale}px "Microsoft YaHei",sans-serif`;
+    const tw=ctx.measureText(label).width;
+    const lx=x1,ly=Math.max(y1-4*scale,18*scale);
+    ctx.fillStyle=col;ctx.fillRect(lx,ly-tw-10*scale,0,0); // noop
+    ctx.fillStyle=col;ctx.fillRect(lx,ly-20*scale,tw+10*scale,20*scale);
+    ctx.fillStyle='#04120f';ctx.fillText(label,lx+5*scale,ly-5*scale);
+  });
+  canvas.style.display='block';$('placeholder').style.display='none';
+}
+
+function updateResult(parts,expect,engine){
+  const pass=parts.filter(p=>p.grade==='pass').length;
+  const warn=parts.length-pass;
+  const avg=parts.length?(parts.reduce((s,p)=>s+p.score,0)/parts.length):0;
+  $('k-total').textContent=parts.length;$('k-pass').textContent=pass;
+  $('k-warn').textContent=warn;$('k-conf').textContent=parts.length?(avg*100).toFixed(0)+'%':'—';
+  // verdict
+  const v=$('verdict');v.className='verdict';
+  let badge,desc;
+  if(parts.length===0){v.classList.add('idle');badge='未检出';desc='两引擎均未检出零件。可尝试：切换到「视觉分割」、调低置信度阈值、或提高分割灵敏度'}
+  else if(expect>0 && parts.length!==expect){v.classList.add('fail');badge='NG · 数量不符';desc=`检出 ${parts.length} 件，期望 ${expect} 件 —— 缺件或多件`}
+  else if(warn>0){v.classList.add('warn');badge='待复检';desc=`检出 ${parts.length} 件，其中 ${warn} 件置信度低于合格线，建议人工复检`}
+  else{v.classList.add('pass');badge='PASS · 合格';desc=`检出 ${parts.length} 件，全部合格，抓取点已定位`}
+  $('v-badge').textContent=badge;$('v-desc').textContent=desc;
+  // table
+  const tb=$('tbody');
+  tb.innerHTML=parts.length?parts.map(p=>`<tr>
+    <td>${p.id}</td><td>${p.name}<br><span style="color:var(--muted);font-size:10px">${p.code}</span></td>
+    <td>${(p.score*100).toFixed(0)}%</td><td>${p.gx.toFixed(0)},${p.gy.toFixed(0)}</td>
+    <td><span class="tag ${p.grade}">${p.grade==='pass'?'合格':'可疑'}</span></td></tr>`).join('')
+    :'<tr><td colspan="5" style="color:var(--muted);text-align:center;padding:18px">暂无检出零件</td></tr>';
+  lastReport={verdict:badge,desc,engine,expect,summary:{total:parts.length,pass,warn,avg_score:+avg.toFixed(4)},
+    parts:parts.map(p=>({id:p.id,class:p.code,name:p.name,confidence:+p.score.toFixed(4),grade:p.grade,
+      box:{x1:+p.box[0].toFixed(1),y1:+p.box[1].toFixed(1),x2:+p.box[2].toFixed(1),y2:+p.box[3].toFixed(1)},
+      grasp_px:{x:+p.gx.toFixed(1),y:+p.gy.toFixed(1)},
+      grasp_norm:{x:+(p.gx/currentImage.naturalWidth).toFixed(4),y:+(p.gy/currentImage.naturalHeight).toFixed(4)}})),
+    image:{width:currentImage.naturalWidth,height:currentImage.naturalHeight},
+    engine:engine,model:engine==='视觉分割'?'背景差分+连通域(前端)':'YOLO11n makerspace (ONNX)',generated_at:new Date().toISOString()};
+  $('btn-export').disabled=false;
+}
+
+async function run(){
+  const mode=$('engine-mode').value;
+  if(mode!=='seg'){const sess=await ensureSession();if(!sess)return}
+  if(!currentImage){toast('请先上传图片');return}
+  const conf=parseFloat($('conf').value),passline=parseFloat($('passline').value),expect=parseInt($('expect').value)||0;
+  const segth=parseInt($('segth').value),minArea=parseInt($('minarea').value)||150;
+  if(passline<conf){passline=conf;$('passline').value=conf;$('passlinev').textContent=conf.toFixed(2)+' — 合格线不能低于阈值'}
+  $('btn-run').disabled=true;setStatus('正在检测…');
+  try{
+    const t0=performance.now();
+    let parts=[],engine='';
+    // ---- YOLO 引擎 ----
+    if(mode==='yolo'||mode==='auto'){
+      const p=letterbox(currentImage);
+      const tensor=new ort.Tensor('float32',p.data,[1,3,640,640]);
+      const out=await ortSession.run({[window._in]:tensor});
+      const key=Object.keys(out)[0];
+      const dets=decode(out[key].data,p.r,p.dw,p.dh,conf,0.45);
+      parts=grade(dets,passline);engine='YOLO11n';
+    }
+    // ---- 自动切换：YOLO 无检出 / 检出少且低置信 → 视觉分割，取更优结果 ----
+    if(mode==='seg'){
+      setStatus('视觉分割引擎处理中…');
+      parts=segmentParts(currentImage,segth,minArea,passline);engine='视觉分割';
+    }else if(mode==='auto'){
+      const maxConf=parts.length?Math.max(...parts.map(p=>p.score)):0;
+      const weak=parts.length===0 || (parts.length<=2 && maxConf<0.7);
+      if(weak){
+        setStatus('YOLO 结果不足，切换视觉分割引擎…');
+        const segParts=segmentParts(currentImage,segth,minArea,passline);
+        if(segParts.length>parts.length){parts=segParts;engine='视觉分割'}
+      }
+    }
+    const ms=performance.now()-t0;
+    render(parts);updateResult(parts,expect,engine);
+    setStatus(`${engine} · ${parts.length} 件 · ${ms.toFixed(0)} ms`,'ok');
+    toast(`质检完成 · ${engine} 检出 ${parts.length} 件`);
+  }catch(e){setStatus('检测失败：'+e.message,'err');console.error(e)}
+  finally{$('btn-run').disabled=false}
+}
+
+/* ---- input handling ---- */
+function acceptFile(f){
+  if(!f||!f.type.startsWith('image/')){toast('请选择图片文件');return}
+  const url=URL.createObjectURL(f);
+  const im=new Image();
+  im.onload=()=>{currentImage=im;$('btn-run').disabled=false;$('btn-clear').disabled=false;
+    setStatus('图片已就绪 · '+im.naturalWidth+'×'+im.naturalHeight,'ok');
+    // preview raw image
+    const c=$('stage'),x=c.getContext('2d');c.width=im.naturalWidth;c.height=im.naturalHeight;
+    x.clearRect(0,0,c.width,c.height);x.drawImage(im,0,0);c.style.display='block';$('placeholder').style.display='none';
+    URL.revokeObjectURL(url)};
+  im.onerror=()=>{toast('图片读取失败');URL.revokeObjectURL(url)};
+  im.src=url;
+}
+$('file').addEventListener('change',e=>acceptFile(e.target.files[0]));
+const drop=$('drop');
+drop.addEventListener('click',()=>$('file').click());
+['dragenter','dragover'].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.add('over')}));
+['dragleave','drop'].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.remove('over')}));
+drop.addEventListener('drop',e=>acceptFile(e.dataTransfer.files[0]));
+
+$('btn-run').addEventListener('click',run);
+$('btn-clear').addEventListener('click',()=>{
+  currentImage=null;lastReport=null;
+  $('stage').style.display='none';$('placeholder').style.display='block';
+  $('btn-run').disabled=true;$('btn-clear').disabled=true;$('btn-export').disabled=true;
+  $('file').value='';setStatus('等待上传图片');
+  $('verdict').className='verdict idle';$('v-badge').textContent='待检测';$('v-desc').textContent='上传图片并点击开始检测';
+  ['k-total','k-pass','k-warn','k-conf'].forEach(id=>$(id).textContent=id==='k-conf'?'—':'0');
+  $('tbody').innerHTML='<tr><td colspan="5" style="color:var(--muted);text-align:center;padding:18px">暂无数据</td></tr>';
+});
+$('btn-export').addEventListener('click',()=>{
+  if(!lastReport)return;
+  const blob=new Blob([JSON.stringify(lastReport,null,2)],{type:'application/json'});
+  const a=document.createElement('a');a.href=URL.createObjectURL(blob);
+  a.download='质检报告_'+Date.now()+'.json';a.click();URL.revokeObjectURL(a.href);toast('报告已导出');
+});
+$('conf').addEventListener('input',e=>{$('confv').textContent=(+e.target.value).toFixed(2)+' — 低于此值的目标不纳入统计';
+  if(+$('passline').value<+e.target.value){$('passline').value=e.target.value;$('passlinev').textContent=(+e.target.value).toFixed(2)+' — 合格线不能低于阈值'}});
+$('passline').addEventListener('input',e=>{const v=+e.target.value,c=+$('conf').value;
+  if(v<c){e.target.value=c;$('passlinev').textContent=c.toFixed(2)+' — 合格线不能低于阈值'}
+  else $('passlinev').textContent=v.toFixed(2)+' — 置信度≥此值判合格，之间判可疑'});
+$('segth').addEventListener('input',e=>{$('segthv').textContent=e.target.value+' — '+(e.target.value<=14?'敏感（保留细节）':'保守（去噪）')});
+$('engine-mode').addEventListener('change',e=>{
+  const hints={auto:'YOLO 优先，检不出自动切换视觉分割',yolo:'仅用模型识别 15 类工业零件',seg:'背景差分定位任意零件，适合 3D 渲染/密集合集图'};
+  $('engine-hint').textContent=hints[e.target.value];
+});
+
+ensureSession();
+</script>
+</body>
+</html>
