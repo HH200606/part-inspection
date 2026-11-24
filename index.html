@@ -145,13 +145,13 @@ footer{margin-top:18px;text-align:center;color:#5a6a7d;font-size:11px}
     <select id="engine-mode">
       <option value="auto">自动（YOLO 优先，检不出自动切换视觉分割）</option>
       <option value="yolo">仅 YOLO 精准分类识别</option>
-      <option value="seg">仅视觉分割定位</option>
+      <option value="seg">仅视觉分割（定位+类别比对）</option>
     </select>
     <div class="hint" id="engine-hint">YOLO 认螺丝/螺母/PCB 等 15 类；自动模式无检出或域外误检时会切换视觉分割，并在画面下方显示决策链。</div>
 
     <label>目标零件类别（精准分类，可选）</label>
     <select id="target-class"><option value="">不指定（识别全部 15 类）</option></select>
-    <div class="hint">选定后 YOLO 只统计该类，类别不符判 NG；视觉分割不提供类别，指定类别时请优先用 YOLO / 自动模式。</div>
+    <div class="hint">选定后只统计该类，类别不符判 NG。视觉分割已内置 15 类样图库，会对每个零件比对贴类别，低相似度（&lt;60%）标为未知。</div>
 
     <label>置信度阈值（YOLO 用）</label>
     <input type="range" id="conf" min="0.05" max="0.90" step="0.05" value="0.25">
@@ -174,7 +174,7 @@ footer{margin-top:18px;text-align:center;color:#5a6a7d;font-size:11px}
 
     <label>模板相似度合格线</label>
     <input type="range" id="tpl-th" min="0.50" max="0.95" step="0.05" value="0.75">
-    <div class="hint" id="tpl-thv">0.75 — 与标准样品相似度低于此值判 NG</div>
+    <div class="hint" id="tpl-thv">0.75 — 相似度低于此值判 NG，并指出颜色/结构/比例哪项不合格</div>
 
     <label>期望零件数量（可选，0=不检查）</label>
     <input type="number" id="expect" min="0" max="999" value="0">
@@ -210,7 +210,7 @@ footer{margin-top:18px;text-align:center;color:#5a6a7d;font-size:11px}
     <div class="decision" id="decision">引擎决策链：等待检测（自动模式会在这里显示 YOLO → 视觉分割的切换过程）</div>
     <div class="note" id="note-engine">
       <b>双引擎</b>：① YOLO11n 模型识别螺丝、螺母/螺栓、PCB、电机等 15 类并给类别与置信度；
-      ② 视觉分割引擎（背景差分 + 连通域）定位任意形状零件，适用于 3D 渲染图、密集零件合集。
+      ② 视觉分割引擎（背景差分 + 连通域）定位零件后，再用内置 15 类样图库对每个零件做特征比对，输出<b>具体类别 + 相似度</b>（低相似度标「未知零件」）。
       自动模式先跑 YOLO，无检出或域外误检时自动切换视觉分割；每个零件单独给 OK/NG 和原因，可导出报告。
     </div>
   </div>
@@ -242,7 +242,11 @@ footer{margin-top:18px;text-align:center;color:#5a6a7d;font-size:11px}
     </div>
 
     <div class="runbar" style="margin-top:14px">
-      <button class="btn wide" id="btn-export" disabled>⬇ 导出质检报告 (JSON)</button>
+      <button class="btn" id="btn-export-csv" disabled>⬇ 表格 (CSV)</button>
+      <button class="btn" id="btn-export-doc" disabled>⬇ 报告 (可打印)</button>
+    </div>
+    <div class="runbar" style="margin-top:8px">
+      <button class="btn wide" id="btn-export" disabled>⬇ 导出原始数据 (JSON)</button>
     </div>
   </div>
 
@@ -261,6 +265,8 @@ const CODE={screw:'SCR',nut_bolt:'NUT',pcb:'PCB',motor:'MTR',battery:'BAT',tool:
 
 let ortSession=null,ortPromise=null,currentImage=null,lastReport=null;
 let templateImg=null,templateFeat=null,templateUrl=null,lastDecision=null;
+let classRefs=null,classRefsReady=false,classRefsPromise=null;
+const CLASS_MIN_SIM=0.62; // 低于此相似度不强行贴图，标为未知类别
 
 CLASSES.forEach((c,i)=>{const o=document.createElement('option');o.value=c;o.textContent=`${i}. ${CN[c]}`;$('target-class').appendChild(o)});
 
@@ -388,7 +394,18 @@ function featureSimilarity(a,b){
   let sq=0;for(let i=0;i<256;i++){const d=a.gray[i]-b.gray[i];sq+=d*d}
   const shape=Math.max(0,1-Math.sqrt(sq/256)/3);
   const aspect=1-Math.min(1,Math.abs(Math.log(a.aspect/b.aspect))/0.7);
-  return Math.max(0,Math.min(1,0.35*color+0.45*shape+0.20*aspect));
+  const total=Math.max(0,Math.min(1,0.35*color+0.45*shape+0.20*aspect));
+  return {total,color,shape,aspect};
+}
+// 找出拖低总分最多的那一项，给出人能看懂的缺陷原因
+function tplDefect(d){
+  const gaps=[
+    {name:'颜色/表面质感差异大',gap:(1-d.color)*0.35},
+    {name:'表面纹理/结构不符（疑似缺陷）',gap:(1-d.shape)*0.45},
+    {name:'长宽比例不符（尺寸偏差）',gap:(1-d.aspect)*0.20}
+  ];
+  gaps.sort((a,b)=>b.gap-a.gap);
+  return gaps[0].name;
 }
 function prepareTemplate(img){
   // 标准样品通常是单个零件：优先用分割结果自动裁剪主体；失败时整图比对
@@ -403,21 +420,87 @@ function prepareTemplate(img){
   }catch(e){}
   return partFeatures(img,box);
 }
+/* ---- 内置类别库：视觉分割只给位置，这里用 15 类样图特征给每个零件贴类别 ---- */
+function loadClassRefs(){
+  if(classRefsReady)return Promise.resolve(classRefs);
+  if(classRefsPromise)return classRefsPromise;
+  classRefsPromise=new Promise(res=>{
+    const im=new Image();
+    im.onload=()=>{
+      // 参考图 5 列 × 3 行，每格 64×64，顺序与 CLASSES 一致
+      const S=64;
+      classRefs=CLASSES.map((c,i)=>partFeatures(im,[(i%5)*S,Math.floor(i/5)*S,(i%5+1)*S,(Math.floor(i/5)+1)*S]));
+      classRefsReady=true;res(classRefs);
+    };
+    im.onerror=()=>{classRefsPromise=null;res(null)};
+    im.src='test-images/class-refs.png';
+  });
+  return classRefsPromise;
+}
+function tightenBox(img,box){
+  // 分割框常把整格/白边也框进来；先按背景差分收紧到零件本体，否则带白边比对准确率会腰斩
+  const x1=Math.max(0,Math.floor(box[0])),y1=Math.max(0,Math.floor(box[1]));
+  const x2=Math.min(img.naturalWidth,Math.ceil(box[2])),y2=Math.min(img.naturalHeight,Math.ceil(box[3]));
+  const w=x2-x1,h=y2-y1;
+  if(w<12||h<12)return [x1,y1,x2,y2];
+  const cv=document.createElement('canvas');cv.width=w;cv.height=h;
+  const ctx=cv.getContext('2d',{willReadFrequently:true});ctx.drawImage(img,x1,y1,w,h,0,0,w,h);
+  const d=ctx.getImageData(0,0,w,h).data;
+  const gray=(x,y)=>{const i=(y*w+x)*4;return (d[i]*77+d[i+1]*150+d[i+2]*29)>>8};
+  // 四边取中值作背景灰度
+  const border=[];const step=Math.max(1,Math.floor(Math.min(w,h)/40));
+  for(let x=0;x<w;x+=step){border.push(gray(x,0),gray(x,h-1))}
+  for(let y=0;y<h;y+=step){border.push(gray(0,y),gray(w-1,y))}
+  border.sort((a,b)=>a-b);const bg=border[border.length>>1];
+  // 找显著偏离背景的像素；忽略边缘 2px 防止把格子边框当成零件
+  const inset=Math.max(1,Math.round(Math.min(w,h)*0.02));
+  let mnx=w,mny=h,mxx=0,mxy=0,hit=0;
+  for(let y=inset;y<h-inset;y++)for(let x=inset;x<w-inset;x++){
+    if(Math.abs(gray(x,y)-bg)>14){hit++;if(x<mnx)mnx=x;if(x>mxx)mxx=x;if(y<mny)mny=y;if(y>mxy)mxy=y}
+  }
+  if(hit<12||mxx-mnx<6||mxy-mny<6)return [x1,y1,x2,y2];
+  const pad=Math.max(1,Math.round(Math.min(w,h)*0.01));
+  return [x1+Math.max(0,mnx-pad),y1+Math.max(0,mny-pad),x1+Math.min(w,mxx+pad+1),y1+Math.min(h,mxy+pad+1)];
+}
+function classifyCropped(img,box){
+  // 先收紧到零件本体，再提特征比对（带白边整图比对准确率会从 15/15 掉到 7/15）
+  const f=partFeatures(img,tightenBox(img,box));
+  let best=-1,bestSim=0;
+  for(let i=0;i<classRefs.length;i++){
+    const s=featureSimilarity(f,classRefs[i]).total;
+    if(s>bestSim){bestSim=s;best=i}
+  }
+  return bestSim>=CLASS_MIN_SIM?{cls:best,sim:bestSim}:{cls:-1,sim:bestSim};
+}
+function applyClassLabels(parts){
+  return loadClassRefs().then(refs=>{
+    if(!refs)return false;
+    parts.forEach(p=>{
+      const r=classifyCropped(currentImage,p.box);
+      p.classSim=r.sim;
+      if(r.cls>=0){p.cls=r.cls;p.name=CN[CLASSES[r.cls]];p.code=CODE[CLASSES[r.cls]]||('C'+r.cls);p.classified=true}
+      else{p.cls=null;p.name='未知零件';p.code='UNK';p.classified=false}
+    });
+    return true;
+  });
+}
+
 function applyVerdicts(parts,opts){
   const {targetCls,passline,tplTh}=opts;
   parts.forEach(p=>{
     const reasons=[];
-    const clsName=p.cls===undefined?null:CLASSES[p.cls];
+    const clsName=(p.cls===undefined||p.cls===null)?null:CLASSES[p.cls];
     if(targetCls){
-      if(!clsName)reasons.push('未识别类别（视觉分割不提供类别）');
+      if(!clsName)reasons.push(`未识别类别（相似度 ${(p.classSim||0)*100 < 0 ? 0 : ((p.classSim||0)*100).toFixed(0)}%，无法确定是否为${CN[targetCls]||targetCls}）`);
       else if(clsName!==targetCls)reasons.push(`类别不符：${p.name} ≠ ${CN[targetCls]||targetCls}`);
     }
     if(p.score<passline)reasons.push(`质量分 ${(p.score*100).toFixed(0)}% < 合格线 ${(passline*100).toFixed(0)}%`);
     if(templateFeat&&currentImage){
       try{
-        const sim=featureSimilarity(partFeatures(currentImage,p.box),templateFeat);
-        p.templateScore=sim;
-        if(sim<tplTh)reasons.push(`与标准样品相似度 ${(sim*100).toFixed(0)}% < ${(tplTh*100).toFixed(0)}%`);
+        const d=featureSimilarity(partFeatures(currentImage,p.box),templateFeat);
+        const sim=d.total;
+        p.templateScore=sim;p.templateDetail=d;
+        if(sim<tplTh)reasons.push(`与标准样品相似度 ${(sim*100).toFixed(0)}% < ${(tplTh*100).toFixed(0)}%（${tplDefect(d)}：颜色${(d.color*100).toFixed(0)}% / 结构${(d.shape*100).toFixed(0)}% / 比例${(d.aspect*100).toFixed(0)}%）`);
       }catch(e){reasons.push('模板比对失败')}
     }
     p.ok=reasons.length===0;
@@ -471,9 +554,13 @@ function segmentParts(img,threshold,minArea,passline){
     // 细长噪声（水印笔画/螺纹边缘）：短边过小或填充率过低，一律丢弃
     const minSide=Math.max(4,Math.round(10*Math.sqrt(N/(640*640))));
     const isNoise=Math.min(bw,bh)<minSide || fill<0.18;
+    // 文字标签过滤：又小又扁的文字（如示例海报上的类别名）不是零件
+    const isText=Math.min(bw,bh)<minSide*1.6 && area<N*0.002;
+    // 顶部标题栏：横跨整图的长条不是零件
+    const isBanner=touchesEdge && bw>W*0.9 && bh<H*0.15;
     // 超大前景块：几乎占满整图时才是背景未分离；单个大零件（如特写电池）应当保留
     const isHuge=area>N*0.75;
-    if(!isNoise && !isHuge && area>=effMinArea && !(touchesEdge && area>N*0.35)){
+    if(!isNoise && !isText && !isBanner && !isHuge && area>=effMinArea && !(touchesEdge && area>N*0.35)){
       // 形状质量分：填充率越高越"实心规整"，作为质检评分
       const score=Math.min(0.99,Math.max(0.35,0.45+0.55*fill));
       comps.push({box:[minx,miny,maxx+1,maxy+1],area,score,fill,touchesEdge});
@@ -517,7 +604,7 @@ function render(parts){
   ctx.clearRect(0,0,W,H);ctx.drawImage(img,0,0,W,H);
   const scale=Math.max(1,W/1100);
   parts.forEach(p=>{
-    const col=p.ok===false?'#ff5c6c':'#00d4aa';
+    const col=p.ok===false?'#ff5c6c':(p.classified===false?'#ff9f43':'#00d4aa');
     const [x1,y1,x2,y2]=p.box;
     ctx.strokeStyle=col;ctx.lineWidth=2*scale;ctx.strokeRect(x1,y1,x2-x1,y2-y1);
     // 半透明填充
@@ -552,7 +639,9 @@ function updateResult(parts,expect,engine,opts){
   const v=$('verdict');v.className='verdict';
   let badge,desc;
   const firstNG=parts.find(p=>!p.ok);
-  if(parts.length===0){v.classList.add('idle');badge='未检出';desc='两引擎均未检出零件。可尝试：切换到「视觉分割」、调低置信度阈值、或提高分割灵敏度'}
+  if(parts.length===0){v.classList.add('idle');badge='未检出';
+    if(opts&&opts.targetCls)desc=`未检出目标类别「${CN[opts.targetCls]}」。可尝试：清空目标类别、换用其他类别、或调低置信度阈值`;
+    else desc='两引擎均未检出零件。可尝试：切换到「视觉分割」、调低置信度阈值、或提高分割灵敏度'}
   else if(expect>0 && parts.length!==expect){v.classList.add('fail');badge='NG · 数量不符';desc=`检出 ${parts.length} 件，期望 ${expect} 件 —— 缺件或多件`}
   else if(ngCount>0){v.classList.add('fail');badge=`NG · ${ngCount} 件不合格`;desc=`第 ${firstNG.id} 件：${firstNG.reasons.join('；')}`}
   else{v.classList.add('pass');badge='OK · 合格';desc=`检出 ${parts.length} 件，逐件判定全部合格，抓取点已定位`}
@@ -561,7 +650,7 @@ function updateResult(parts,expect,engine,opts){
   // table
   const tb=$('tbody');
   tb.innerHTML=parts.length?parts.map(p=>`<tr>
-    <td>${p.id}</td><td>${p.name}<br><span style="color:var(--muted);font-size:10px">${p.code}</span></td>
+    <td>${p.id}</td><td>${p.name}<br><span style="color:var(--muted);font-size:10px">${p.code}${p.classSim!==undefined?` · 类别相似 ${(p.classSim*100).toFixed(0)}%`:''}</span></td>
     <td>${(p.score*100).toFixed(0)}%${p.templateScore!==undefined?`<br><span style="color:var(--muted);font-size:10px">模板 ${(p.templateScore*100).toFixed(0)}%</span>`:''}</td>
     <td>${p.gx.toFixed(0)},${p.gy.toFixed(0)}</td>
     <td><span class="tag ${p.ok?'pass':'reject'}">${p.verdict}</span>${p.ok?'':`<span class="tag reason">${p.reasons.join('；')}</span>`}</td></tr>`).join('')
@@ -572,13 +661,15 @@ function updateResult(parts,expect,engine,opts){
     template:templateFeat?{enabled:true,similarity_threshold:opts.tplTh,avg_similarity:avgSim===null?null:+avgSim.toFixed(4)}:{enabled:false},
     summary:{total:parts.length,ok:okCount,ng:ngCount,avg_score:+avg.toFixed(4)},
     parts:parts.map(p=>({id:p.id,class:p.code,name:p.name,confidence:+p.score.toFixed(4),verdict:p.verdict,reasons:p.reasons,
+      class_key:p.cls===null||p.cls===undefined?null:CLASSES[p.cls],class_similarity:p.classSim===undefined?null:+p.classSim.toFixed(4),
       template_similarity:p.templateScore===undefined?null:+p.templateScore.toFixed(4),
+      template_detail:p.templateDetail?{color:+p.templateDetail.color.toFixed(4),structure:+p.templateDetail.shape.toFixed(4),aspect:+p.templateDetail.aspect.toFixed(4),main_defect:tplDefect(p.templateDetail)}:null,
       box:{x1:+p.box[0].toFixed(1),y1:+p.box[1].toFixed(1),x2:+p.box[2].toFixed(1),y2:+p.box[3].toFixed(1)},
       grasp_px:{x:+p.gx.toFixed(1),y:+p.gy.toFixed(1)},
       grasp_norm:{x:+(p.gx/currentImage.naturalWidth).toFixed(4),y:+(p.gy/currentImage.naturalHeight).toFixed(4)}})),
     image:{width:currentImage.naturalWidth,height:currentImage.naturalHeight},
     engine:engine,model:engine==='视觉分割'?'背景差分+连通域(前端)':'YOLO11n makerspace (ONNX)',generated_at:new Date().toISOString()};
-  $('btn-export').disabled=false;
+  ['btn-export','btn-export-csv','btn-export-doc'].forEach(id=>$(id).disabled=false);
 }
 
 function showDecision(d){
@@ -650,6 +741,20 @@ async function run(){
       }
     }
     engine=decision.used;
+    // 视觉分割不含类别：用内置 15 类样图库对每个紧裁剪的零件做特征分类
+    if(engine==='视觉分割'&&parts.length){
+      setStatus('正在识别零件类别…');
+      const ok=await applyClassLabels(parts);
+      if(ok)decision.steps.push(`类别库比对 ${parts.length} 件 → ${parts.map(p=>p.name).join('、')}`);
+      else decision.steps.push('类别库加载失败，零件保持通用编号');
+    }
+    // 目标类别筛选：只保留选中类别的零件，实现「选中类别 → 定位到该类零件」
+    if(targetCls){
+      const before=parts.length;
+      parts=parts.filter(p=>p.cls!==undefined&&p.cls!==null&&CLASSES[p.cls]===targetCls);
+      decision.steps.push(`按目标类别定位：${CN[targetCls]} ${parts.length}/${before} 件`);
+      if(!parts.length)decision.reason=`未检出目标类别「${CN[targetCls]}」`;
+    }
     applyVerdicts(parts,opts);
     const ms=performance.now()-t0;
     render(parts);updateResult(parts,expect,engine,opts);showDecision(decision);
@@ -703,13 +808,14 @@ function acceptTemplate(f){
   im.src=url;
 }
 $('tpl-file').addEventListener('change',e=>acceptTemplate(e.target.files[0]));
-$('tpl-th').addEventListener('input',e=>{$('tpl-thv').textContent=(+e.target.value).toFixed(2)+' — 与标准样品相似度低于此值判 NG'});
+$('tpl-th').addEventListener('input',e=>{$('tpl-thv').textContent=(+e.target.value).toFixed(2)+' — 低于此值判 NG，并指出颜色/结构/比例哪项不合格'});
 
 $('btn-run').addEventListener('click',run);
 $('btn-clear').addEventListener('click',()=>{
   currentImage=null;lastReport=null;
   $('stage').style.display='none';$('placeholder').style.display='block';
-  $('btn-run').disabled=true;$('btn-clear').disabled=true;$('btn-export').disabled=true;
+  $('btn-run').disabled=true;$('btn-clear').disabled=true;
+  ['btn-export','btn-export-csv','btn-export-doc'].forEach(id=>$(id).disabled=true);
   $('file').value='';setStatus('等待上传图片');
   $('verdict').className='verdict idle';$('v-badge').textContent='待检测';$('v-desc').textContent='上传图片并点击开始检测';
   lastDecision=null;
@@ -719,11 +825,75 @@ $('btn-clear').addEventListener('click',()=>{
   ['k-total','k-pass','k-warn','k-conf'].forEach(id=>$(id).textContent=id==='k-conf'?'—':'0');
   $('tbody').innerHTML='<tr><td colspan="5" style="color:var(--muted);text-align:center;padding:18px">暂无数据</td></tr>';
 });
+function downloadFile(content,mime,name){
+  const blob=new Blob([content],{type:mime});
+  const a=document.createElement('a');a.href=URL.createObjectURL(blob);
+  a.download=name;a.click();URL.revokeObjectURL(a.href);
+}
+function csvCell(v){const s=(v===null||v===undefined)?'':String(v);return /[",\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s}
 $('btn-export').addEventListener('click',()=>{
   if(!lastReport)return;
-  const blob=new Blob([JSON.stringify(lastReport,null,2)],{type:'application/json'});
-  const a=document.createElement('a');a.href=URL.createObjectURL(blob);
-  a.download='质检报告_'+Date.now()+'.json';a.click();URL.revokeObjectURL(a.href);toast('报告已导出');
+  downloadFile(JSON.stringify(lastReport,null,2),'application/json','质检报告_'+Date.now()+'.json');toast('原始数据已导出');
+});
+$('btn-export-csv').addEventListener('click',()=>{
+  if(!lastReport)return;
+  const R=lastReport;
+  const head=['序号','零件类别','类别代码','类别相似度','质量分','抓取点X(px)','抓取点Y(px)','判定','原因'];
+  const rows=R.parts.map(p=>[p.id,p.name,p.class,
+    p.class_similarity===null?'':(p.class_similarity*100).toFixed(0)+'%',
+    (p.confidence*100).toFixed(0)+'%',p.grasp_px.x,p.grasp_px.y,p.verdict,p.reasons.join('；')]);
+  const meta=[['质检结论',R.verdict],['说明',R.desc],['引擎',R.engine],['检出数量',R.summary.total],
+    ['OK',R.summary.ok],['NG',R.summary.ng],['目标类别',R.target_class?R.target_class.name:'全部'],
+    ['模板比对',R.template.enabled?'启用（阈值'+R.template.similarity_threshold+'）':'未启用'],['生成时间',R.generated_at],[]];
+  const lines=[...meta,head,...rows].map(r=>r.map(csvCell).join(',')).join('\r\n');
+  downloadFile('\ufeff'+lines,'text/csv;charset=utf-8','质检报告_'+Date.now()+'.csv');toast('CSV 表格已导出');
+});
+$('btn-export-doc').addEventListener('click',()=>{
+  if(!lastReport)return;
+  const R=lastReport;
+  const esc=s=>String(s===null||s===undefined?'':s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+  const rows=R.parts.map(p=>`<tr>
+    <td>${p.id}</td><td>${esc(p.name)}<br><span class="muted">${esc(p.class)}</span></td>
+    <td>${p.class_similarity===null?'—':(p.class_similarity*100).toFixed(0)+'%'}</td>
+    <td>${(p.confidence*100).toFixed(0)}%</td>
+    <td>${p.grasp_px.x.toFixed(0)}, ${p.grasp_px.y.toFixed(0)}</td>
+    <td class="${p.verdict==='OK'?'ok':'ng'}">${p.verdict}</td>
+    <td>${p.reasons.length?p.reasons.map(esc).join('<br>'):'—'}</td></tr>`).join('');
+  const ok=R.verdict.startsWith('OK');
+  const html=`<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"><title>质检报告</title>
+<style>
+body{font-family:"Microsoft YaHei",sans-serif;color:#1a2230;padding:32px;max-width:960px;margin:auto;line-height:1.5}
+h1{font-size:22px;margin-bottom:6px}h2{font-size:16px;margin:22px 0 10px}
+.muted{color:#7a8798;font-size:11px}.meta{color:#5c6b7d;font-size:12px;margin-bottom:18px}
+.verdict{border:1px solid #ccc;border-radius:10px;padding:16px 18px;margin-bottom:18px;background:#f6f8fa}
+.verdict.ok{border-color:#0c6b56;background:#0d2b26;color:#00c49a}
+.verdict.ng{border-color:#7a2b38;background:#2b1419;color:#ff5c6c}
+.verdict .b{font-size:20px;font-weight:700}
+.kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:18px}
+.kpi{border:1px solid #dfe4ea;border-radius:8px;padding:12px;text-align:center;background:#fafbfc}
+.kpi .v{font-size:22px;font-weight:700}.kpi .l{font-size:11px;color:#6b7a8d}
+table{width:100%;border-collapse:collapse;font-size:12px}
+th,td{border:1px solid #dfe4ea;padding:8px 9px;text-align:left;vertical-align:top}
+th{background:#eef2f6;font-weight:600}
+td.ok{color:#00876b;font-weight:700}td.ng{color:#c62828;font-weight:700}
+.foot{margin-top:20px;color:#8b98a9;font-size:11px;border-top:1px solid #dfe4ea;padding-top:10px}
+@media print{body{padding:0}}
+</style></head><body>
+<h1>工业零件视觉质检报告</h1>
+<div class="meta">生成时间：${esc(R.generated_at)} · 引擎：${esc(R.engine)} · 图像：${R.image.width}×${R.image.height} px</div>
+<div class="verdict ${ok?'ok':'ng'}"><div class="b">${esc(R.verdict)}</div><div>${esc(R.desc)}</div></div>
+<div class="kpis">
+  <div class="kpi"><div class="v">${R.summary.total}</div><div class="l">检出零件</div></div>
+  <div class="kpi"><div class="v">${R.summary.ok}</div><div class="l">OK</div></div>
+  <div class="kpi"><div class="v">${R.summary.ng}</div><div class="l">NG</div></div>
+  <div class="kpi"><div class="v">${(R.summary.avg_score*100).toFixed(0)}%</div><div class="l">平均质量分</div></div>
+</div>
+<h2>逐件明细（抓取点 / 零件判定）</h2>
+<table><thead><tr><th>#</th><th>零件类别</th><th>类别相似</th><th>质量分</th><th>抓取点(px)</th><th>判定</th><th>原因</th></tr></thead>
+<tbody>${rows||'<tr><td colspan="7" style="text-align:center;color:#888">暂无检出零件</td></tr>'}</tbody></table>
+<div class="foot">目标类别：${esc(R.target_class?R.target_class.name:'全部')} · 模板比对：${R.template.enabled?'启用，阈值 '+R.template.similarity_threshold:'未启用'} · 本报告由浏览器本地生成，图片未上传服务器。</div>
+</body></html>`;
+  downloadFile(html,'text/html;charset=utf-8','质检报告_'+Date.now()+'.html');toast('报告已导出，可在浏览器中打印或另存为 PDF');
 });
 $('conf').addEventListener('input',e=>{$('confv').textContent=(+e.target.value).toFixed(2)+' — 低于此值的目标不纳入统计';
   if(+$('passline').value<+e.target.value){$('passline').value=e.target.value;$('passlinev').textContent=(+e.target.value).toFixed(2)+' — 合格线不能低于阈值'}});
@@ -732,11 +902,12 @@ $('passline').addEventListener('input',e=>{const v=+e.target.value,c=+$('conf').
   else $('passlinev').textContent=v.toFixed(2)+' — 置信度≥此值判 OK，低于判 NG'});
 $('segth').addEventListener('input',e=>{$('segthv').textContent=e.target.value+' — '+(e.target.value<=14?'敏感（保留细节）':'保守（去噪）')});
 $('engine-mode').addEventListener('change',e=>{
-  const hints={auto:'YOLO 优先；无检出或域外误检时自动切换视觉分割，画面下方显示决策链',yolo:'仅用模型识别 15 类工业零件，可指定目标类别精准分类',seg:'背景差分定位任意零件，适合 3D 渲染/密集合集图（不提供类别）'};
+  const hints={auto:'YOLO 优先；无检出或域外误检时自动切换视觉分割，切换后仍会比对类别',yolo:'仅用模型识别 15 类工业零件，可指定目标类别精准分类',seg:'背景差分定位零件 + 内置样图库比对类别，适合 3D 渲染/密集合集图'};
   $('engine-hint').textContent=hints[e.target.value];
 });
 
 ensureSession();
+loadClassRefs(); // 预热类别库，首次检测不必等待
 </script>
 </body>
 </html>
